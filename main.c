@@ -152,6 +152,7 @@ void readSummaryRunFile(const char *filename) {
         printf("Raw Cluster Count: %.5e\n", record.raw_cluster_count);
         printf("Occupancy Cluster Count: %.5e\n", record.occupancy_cluster_count);
         printf("PF Cluster Count: %.5e\n", record.PF_cluster_count);
+        printf("Estimated PF Tbases (302 bases / PF cluster): %.1f Tbases\n", record.PF_cluster_count*302/1e12);
 
         // Calculate and print percentages
         double percent_occupancy_proxy = safeDivide(record.occupancy_proxy_cluster_count, record.PF_cluster_count) * 100;
@@ -345,7 +346,7 @@ void parseCorrectedIntensityMetricsFile(const char* filename) {
     BaseCycleMetric base_cycle_metric;
     CorrectedIntensityMetric intensityMetric;
 
-    while (fread(&baseMetric, sizeof(BaseCycleMetric), 1, file) == 1) {
+    while (fread(&base_cycle_metric, sizeof(BaseCycleMetric), 1, file) == 1) {
         if (fread(&intensityMetric, sizeof(CorrectedIntensityMetric), 1, file) != 1) {
             printf("Failed to read corrected intensity metric.\n");
             break; // Break the loop if we fail to read intensity metrics
