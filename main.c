@@ -33,6 +33,30 @@ typedef struct {
 } QCollapsedMetric;
 #pragma pack(pop)
 
+// Calculate and print total reads with Q score >= 30 and the percentage >= Q30.
+// histogram: counts per bin
+// bin_values: Q score value for each bin (NULL if absent; uses 1-indexed default Q1..Q50)
+// bin_count: number of bins
+static void printQ30Stats(const uint32_t *histogram, const uint8_t *bin_values, uint8_t bin_count) {
+    uint64_t total_count = 0;
+    uint64_t q30_count = 0;
+
+    for (int i = 0; i < bin_count; i++) {
+        total_count += histogram[i];
+        uint8_t qscore = bin_values ? bin_values[i] : (uint8_t)(i + 1);
+        if (qscore >= 30) {
+            q30_count += histogram[i];
+        }
+    }
+
+    printf("Total >= Q30: %llu\n", (unsigned long long)q30_count);
+    if (total_count > 0) {
+        printf("Percent >= Q30: %.2f%%\n", (double)q30_count / (double)total_count * 100.0);
+    } else {
+        printf("Percent >= Q30: N/A\n");
+    }
+}
+
 // Function to read the QMetrics metric file
 void readQMetricsFile(const char *filename) {
     FILE* file = fopen(filename, "rb");
@@ -94,8 +118,7 @@ void readQMetricsFile(const char *filename) {
         }
         printf("\n");
 
-        // printf("Q20 Count: %u, Q30 Count: %u, Total Count: %u, Median Score: %u\n", 
-        //     q_collapsed_metric.q20_count, q_collapsed_metric.q30_count, q_collapsed_metric.total_count, q_collapsed_metric.median_score);
+        printQ30Stats(histogram, header.has_bins ? extended_header.values : NULL, extended_header.bin_count);
     }
 
     // Clean up
