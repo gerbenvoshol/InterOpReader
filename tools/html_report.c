@@ -1114,6 +1114,17 @@ int main(int argc, char *argv[])
             else if (r->code == INTEROP_TILE_DENSITY_PF)
                 { lane_stats[idx].density_pf       += r->value; lane_stats[idx].n_density_pf++; }
         }
+        /* v3+: density is stored in the file header rather than per-tile records.
+         * Populate density for each lane from tm.density when no per-tile records exist. */
+        if (tm.version >= 3 && tm.density > 0.0f) {
+            int k;
+            for (k = 0; k < nlanes; k++) {
+                if (lane_stats[k].n_density == 0) {
+                    lane_stats[k].density   = tm.density;
+                    lane_stats[k].n_density = 1;
+                }
+            }
+        }
     }
 
     if (has_em) {

@@ -127,6 +127,7 @@ typedef struct {
 /** Collection of tile metric records. */
 typedef struct {
     uint8_t  version;
+    float    density;    /**< v3+: cluster density from file header (k/mm²) */
     interop_tile_record_t *records;
     size_t   count;
     size_t   capacity;
@@ -630,16 +631,81 @@ int interop_read_tile_metrics(const char *filename, interop_tile_metrics_t *out)
     }
     out->version = version;
 
+    /* v3+: header contains an additional 4-byte density float before records */
+    if (version >= 3) {
+        if (!interop__fread1(&out->density, sizeof(float), f)) {
+            fclose(f); return 2;
+        }
+    }
+
     while (!feof(f)) {
-        interop_tile_record_t rec;
-        if (!interop__fread1(&rec.lane,  sizeof(uint16_t), f)) break;
-        if (!interop__fread1(&rec.tile,  sizeof(uint32_t), f)) break;
-        if (!interop__fread1(&rec.code,  sizeof(uint16_t), f)) break;
-        if (!interop__fread1(&rec.value, sizeof(float),    f)) break;
-        if (!interop__ensure_cap((void **)&out->records, out->count,
-                                 &out->capacity,
-                                 sizeof(interop_tile_record_t))) break;
-        out->records[out->count++] = rec;
+        uint16_t lane;
+        uint32_t tile;
+
+        if (!interop__fread1(&lane, sizeof(uint16_t), f)) break;
+        if (!interop__fread1(&tile, sizeof(uint32_t), f)) break;
+
+        if (version >= 3) {
+            /* v3 record: lane(2) + tile(4) + code(1) + data(8)
+             * code 't': cluster_count(4) + pf_cluster_count(4)
+             * code 'r': read_number(4)   + pct_aligned(4)       */
+            uint8_t code;
+            if (!interop__fread1(&code, sizeof(uint8_t), f)) break;
+
+            if (code == 't') {
+                float cluster_count, pf_cluster_count;
+                interop_tile_record_t rec;
+                if (!interop__fread1(&cluster_count,    sizeof(float), f)) break;
+                if (!interop__fread1(&pf_cluster_count, sizeof(float), f)) break;
+                rec.lane = lane; rec.tile = tile;
+                rec.code = INTEROP_TILE_CLUSTER_COUNT; rec.value = cluster_count;
+                if (!interop__ensure_cap((void **)&out->records, out->count,
+                                         &out->capacity,
+                                         sizeof(interop_tile_record_t))) break;
+                out->records[out->count++] = rec;
+                rec.code = INTEROP_TILE_CLUSTER_COUNT_PF; rec.value = pf_cluster_count;
+                if (!interop__ensure_cap((void **)&out->records, out->count,
+                                         &out->capacity,
+                                         sizeof(interop_tile_record_t))) break;
+                out->records[out->count++] = rec;
+            } else if (code == 'r') {
+                uint32_t read_number;
+                float pct_aligned;
+                interop_tile_record_t rec;
+                if (!interop__fread1(&read_number,  sizeof(uint32_t), f)) break;
+                if (!interop__fread1(&pct_aligned,  sizeof(float),    f)) break;
+                rec.lane  = lane; rec.tile = tile;
+                /* Aligned-pct codes: 200 for read 1, 202 for read 2, etc.
+                 * (same scheme as the v2 format: 200 + 2*(read_number-1)) */
+                rec.code  = (uint16_t)(200 + 2 * (read_number - 1));
+                rec.value = pct_aligned;
+                if (!interop__ensure_cap((void **)&out->records, out->count,
+                                         &out->capacity,
+                                         sizeof(interop_tile_record_t))) break;
+                out->records[out->count++] = rec;
+            } else {
+                /* unknown code: skip the remaining data bytes in this record */
+                long skip = (long)record_size -
+                            (long)(sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint8_t));
+                if (skip > 0) fseek(f, skip, SEEK_CUR);
+            }
+        } else {
+            /* v2 record: lane(2) + tile(4) + code(2) + value(4) = 12 bytes */
+            interop_tile_record_t rec;
+            rec.lane = lane; rec.tile = tile;
+            if (!interop__fread1(&rec.code,  sizeof(uint16_t), f)) break;
+            if (!interop__fread1(&rec.value, sizeof(float),    f)) break;
+            /* skip any extra bytes present in newer sub-versions */
+            if (record_size > (uint8_t)(sizeof(uint16_t) + sizeof(uint32_t) +
+                                        sizeof(uint16_t) + sizeof(float)))
+                fseek(f, (long)record_size -
+                          (long)(sizeof(uint16_t) + sizeof(uint32_t) +
+                                 sizeof(uint16_t) + sizeof(float)), SEEK_CUR);
+            if (!interop__ensure_cap((void **)&out->records, out->count,
+                                     &out->capacity,
+                                     sizeof(interop_tile_record_t))) break;
+            out->records[out->count++] = rec;
+        }
     }
     fclose(f);
     return 0;
@@ -781,8 +847,22 @@ int interop_read_error_metrics(const char *filename, interop_error_metrics_t *ou
     }
     out->version = version;
 
+    /* v6+: header has extra fields before records:
+     *   num_reads(2) + per_read_bytes(2) + data[num_reads * per_read_bytes]
+     * v3..v5: no extra header fields */
+    if (version >= 6) {
+        uint16_t num_reads, per_read_bytes;
+        if (!interop__fread1(&num_reads,      sizeof(uint16_t), f) ||
+            !interop__fread1(&per_read_bytes, sizeof(uint16_t), f)) {
+            fclose(f); return 2;
+        }
+        /* skip per-read header data */
+        if (num_reads > 0 && per_read_bytes > 0)
+            fseek(f, (long)num_reads * (long)per_read_bytes, SEEK_CUR);
+    }
+
     /* v3..v5: lane(2)+tile(4)+cycle(2)+error_rate(4)+phix_reads[5](20) = 32 bytes
-     * v6:     lane(2)+tile(4)+cycle(2)+error_rate(4)                   = 12 bytes */
+     * v6:     lane(2)+tile(4)+cycle(2)+error_rate(4)+extra(record_size-12) */
     while (!feof(f)) {
         interop_error_record_t rec;
         memset(&rec, 0, sizeof(rec));
@@ -794,6 +874,13 @@ int interop_read_error_metrics(const char *filename, interop_error_metrics_t *ou
             if (fread(rec.phix_read_count, sizeof(uint32_t),
                       INTEROP_NUM_ERROR_CLASSES, f) !=
                     INTEROP_NUM_ERROR_CLASSES) break;
+        } else if (record_size > (uint8_t)(sizeof(uint16_t) + sizeof(uint32_t) +
+                                            sizeof(uint16_t) + sizeof(float))) {
+            /* skip per-read error-rate fields added in v6
+             * (already read lane(2)+tile(4)+cycle(2)+error_rate(4) = 12 bytes) */
+            fseek(f, (long)record_size -
+                      (long)(sizeof(uint16_t) + sizeof(uint32_t) +
+                             sizeof(uint16_t) + sizeof(float)), SEEK_CUR);
         }
         if (!interop__ensure_cap((void **)&out->records, out->count,
                                  &out->capacity,
