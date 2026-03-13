@@ -306,8 +306,8 @@ static void emit_summary_section(FILE *out,
             pf_clusters / 1e6, pct_pf);
 
         if (occupied_clusters > 0) {
-            double pct_occ = (pf_clusters > 0)
-                ? occupied_clusters / pf_clusters * 100.0 : 0.0;
+            double pct_occ = (raw_clusters > 0)
+                ? occupied_clusters / raw_clusters * 100.0 : 0.0;
             const char *occ_cls = (pct_occ >= 85.0) ? "good" :
                                   (pct_occ >= 70.0) ? "warn" : "bad";
             fprintf(out,
@@ -874,16 +874,17 @@ static void emit_runmeta_section(FILE *out,
             "<tr><td>Occupancy Cluster Count</td><td>%.5e</td></tr>\n"
             "<tr><td>Occupancy Proxy Cluster Count</td><td>%.5e</td></tr>\n"
             "<tr><td>%% Passing Filter</td><td>%.2f%%</td></tr>\n"
-            "<tr><td>Estimated PF Tbases (302 bp avg)</td><td>%.4f Tbases</td></tr>\n",
+            "<tr><td>Estimated PF Gbases (%d bp avg)</td><td>%.2f Gbases</td></tr>\n",
             r->raw_cluster_count,
             r->pf_cluster_count,
             r->occupancy_cluster_count,
             r->occupancy_proxy_cluster_count,
             pct_pf,
-            /* 302 bp is used as a representative average total read length
-             * for Illumina runs (e.g. 2×151 bp paired-end), matching the
-             * same estimate used by interop_print_run_summary(). */
-            r->pf_cluster_count * 302.0 / 1e12);
+            INTEROP_DEFAULT_READ_LENGTH_BP,
+            /* INTEROP_DEFAULT_READ_LENGTH_BP is used as a representative
+             * average total read length for Illumina runs (e.g. 2×151 bp
+             * paired-end), matching the estimate in interop_print_summary_run(). */
+            r->pf_cluster_count * INTEROP_DEFAULT_READ_LENGTH_BP / 1e9);
     }
 
     if (has_etm && etm->count > 0) {
@@ -1195,6 +1196,16 @@ int main(int argc, char *argv[])
         size_t ri;
         for (ri = 0; ri < etm.count; ri++)
             occ_clusters += etm.records[ri].cluster_count_occupied;
+    }
+
+    /* interop_compute_total_reads() sums histogram bins across ALL cycles,
+     * inflating the count by the number of cycles.  When SRM or tile metrics
+     * data are available, use pf_cluster_count as the authoritative total
+     * PF read count, and derive the Q30 read count from the (correct)
+     * percentage. */
+    if (pf_clusters > 0.0) {
+        total_reads = (uint64_t)pf_clusters;
+        q30_reads   = (uint64_t)(pct_q30 * 0.01 * pf_clusters + 0.5);
     }
 
     /* ----------------------------------------------------------

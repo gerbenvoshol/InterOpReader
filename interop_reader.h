@@ -60,6 +60,9 @@ extern "C" {
 /** Maximum number of PhiX error classes tracked per cycle. */
 #define INTEROP_NUM_ERROR_CLASSES 5
 
+/** Default read-length assumed when estimating output in Gbases (302 bp = 2×151). */
+#define INTEROP_DEFAULT_READ_LENGTH_BP 302
+
 /* Tile metric code values (stored in the code field of tile records) */
 #define INTEROP_TILE_DENSITY            100 /**< Cluster density (k/mm²) */
 #define INTEROP_TILE_DENSITY_PF         101 /**< Cluster density PF (k/mm²) */
@@ -1220,8 +1223,9 @@ void interop_print_summary_run(const interop_summary_run_metrics_t *m)
         printf("  Raw Cluster Count:             %.5e\n", r->raw_cluster_count);
         printf("  Occupancy Cluster Count:       %.5e\n", r->occupancy_cluster_count);
         printf("  PF Cluster Count:              %.5e\n", r->pf_cluster_count);
-        printf("  Estimated PF Tbases (302 bp):  %.1f Tbases\n",
-               r->pf_cluster_count * 302.0 / 1e12);
+        printf("  Estimated PF Gbases (%d bp):  %.2f Gbases\n",
+               INTEROP_DEFAULT_READ_LENGTH_BP,
+               r->pf_cluster_count * INTEROP_DEFAULT_READ_LENGTH_BP / 1e9);
         printf("  %% PF:       %.2f%%\n", pct_pf);
         printf("  %% Occupied: %.2f%%\n", pct_occ);
     }
@@ -1343,7 +1347,7 @@ void interop_dump_summary_run_csv(const interop_summary_run_metrics_t *m, FILE *
                 r->occupancy_proxy_cluster_count, r->raw_cluster_count,
                 r->occupancy_cluster_count, r->pf_cluster_count,
                 pct_pf, pct_occ,
-                r->pf_cluster_count * 302.0 / 1e12);
+                r->pf_cluster_count * INTEROP_DEFAULT_READ_LENGTH_BP / 1e12);
     }
 }
 
@@ -1491,8 +1495,8 @@ void interop_print_run_summary(const char *run_folder, FILE *out)
         fprintf(out, "  Raw Clusters   : %.5e\n", r->raw_cluster_count);
         fprintf(out, "  PF Clusters    : %.5e\n", r->pf_cluster_count);
         fprintf(out, "  %% PF           : %.2f%%\n", pct_pf);
-        fprintf(out, "  Est. PF Tbases : %.2f Tbases\n\n",
-                r->pf_cluster_count * 302.0 / 1e12);
+        fprintf(out, "  Est. PF Gbases : %.2f Gbases\n\n",
+                r->pf_cluster_count * INTEROP_DEFAULT_READ_LENGTH_BP / 1e9);
     }
 
     interop_free_qmetrics(&qm);
