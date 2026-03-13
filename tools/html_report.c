@@ -330,12 +330,12 @@ static void emit_summary_section(FILE *out,
 static void emit_qscore_section(FILE *out,
     const interop_qmetrics_t *qm)
 {
-    size_t j;
+    size_t i, j;
     uint64_t histogram[INTEROP_MAX_Q_BINS];
     uint64_t total = 0;
     memset(histogram, 0, sizeof(histogram));
 
-    for (size_t i = 0; i < qm->count; i++) {
+    for (i = 0; i < qm->count; i++) {
         const interop_qmetric_record_t *r = &qm->records[i];
         for (j = 0; j < r->num_bins; j++) {
             histogram[j] += r->histogram[j];
@@ -880,6 +880,9 @@ static void emit_runmeta_section(FILE *out,
             r->occupancy_cluster_count,
             r->occupancy_proxy_cluster_count,
             pct_pf,
+            /* 302 bp is used as a representative average total read length
+             * for Illumina runs (e.g. 2×151 bp paired-end), matching the
+             * same estimate used by interop_print_run_summary(). */
             r->pf_cluster_count * 302.0 / 1e12);
     }
 
