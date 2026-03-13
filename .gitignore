@@ -65,3 +65,4 @@ dkms.conf
 /tools/plot_flowcell
 /tools/plot_sample_qc
 /tools/aggregate
+/tools/html_report
