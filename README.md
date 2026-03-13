@@ -152,6 +152,37 @@ mean intensity per channel).
 ./tools/aggregate /path/to/run_folder > per_cycle.csv
 ```
 
+### `html_report` — self-contained HTML run report
+
+Reads all available InterOp metric files from a run folder and generates a
+self-contained HTML page with interactive charts, summary cards, per-cycle
+plots, per-lane tables, and sample index summaries.
+
+```bash
+./tools/html_report -i /path/to/run_folder -o report.html
+```
+
+The report includes:
+
+- **Summary cards** — total reads, % ≥ Q30, average error rate, PF cluster
+  count, and flowcell occupancy (colour-coded green/amber/red).
+- **Q-Score Distribution** — bar chart histogram plus a table with per-bin
+  read counts and inline progress bars.
+- **Q-Score by Cycle** — mean Q-score per cycle and % ≥ Q30 per cycle as
+  line charts.
+- **Error Rate by Cycle** — mean PhiX error rate per cycle line chart.
+- **Intensity by Cycle** — mean channel intensity (A/C/G/T) per cycle line
+  chart.
+- **Per-Lane Metrics** — cluster count / density / % PF / error rate /
+  cycle-1 intensity table plus bar charts.
+- **Index Summary** — per-sample cluster counts, fraction mapped table, and
+  horizontal bar chart (when `IndexMetricsOut.bin` is present).
+- **Run Metrics** — full run-level cluster counts from `SummaryRunMetrics`
+  and extended tile occupancy.
+
+Charts are rendered with [Chart.js](https://www.chartjs.org/) (loaded from
+jsDelivr CDN); an internet connection is required to view the charts.
+
 ### GNUPlot tools (SAV Analysis Tab equivalents)
 
 All plot tools write a GNUPlot script to stdout.
