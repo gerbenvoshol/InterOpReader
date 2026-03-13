@@ -50,3 +50,18 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Built InterOpReader binaries
+/interop_reader
+/tools/dumptext
+/tools/dumpbin
+/tools/summary
+/tools/imaging_table
+/tools/index_summary
+/tools/plot_qscore_histogram
+/tools/plot_qscore_heatmap
+/tools/plot_by_cycle
+/tools/plot_by_lane
+/tools/plot_flowcell
+/tools/plot_sample_qc
+/tools/aggregate

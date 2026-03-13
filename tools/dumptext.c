@@ -1,36 +1,27 @@
 /*
- * interop_reader — Illumina InterOp binary file reader
+ * dumptext — Dump an Illumina InterOp binary file as human-readable text
  *
- * Reads a single InterOp binary file and prints its contents to stdout in a
- * human-readable format.  File type is detected automatically from the
- * filename.
+ * Equivalent to the Illumina SAV "dumptext" command-line application.
  *
  * Usage:
- *   interop_reader <InterOp/FileOut.bin>
+ *   dumptext <InterOp/FileOut.bin>
  *
- * For run-folder tools (summary, imaging_table, index_summary, plot_* …)
- * see the programs in the tools/ directory.
- *
- * This file implements the INTEROP_IMPLEMENTATION and therefore contains
- * the full library code.  All other translation units that only need the
- * public API should include interop_reader.h *without* defining
- * INTEROP_IMPLEMENTATION.
+ * The file type is detected automatically from the filename.
  */
 
 #define INTEROP_IMPLEMENTATION
-#include "interop_reader.h"
+#include "../interop_reader.h"
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
-static void print_usage(const char *prog)
+static void usage(const char *prog)
 {
     fprintf(stderr,
             "Usage: %s <InterOp/FileOut.bin>\n\n"
-            "Reads one Illumina InterOp binary file and prints its contents.\n"
-            "File type is detected automatically from the filename.\n\n"
-            "Supported file types:\n"
+            "Reads a single Illumina InterOp binary file and prints its\n"
+            "contents in a human-readable text format to stdout.\n\n"
+            "Supported files:\n"
             "  QMetricsOut.bin\n"
             "  TileMetricsOut.bin\n"
             "  CorrectedIntMetricsOut.bin\n"
@@ -38,17 +29,13 @@ static void print_usage(const char *prog)
             "  ErrorMetricsOut.bin\n"
             "  ExtractionMetricsOut.bin\n"
             "  SummaryRunMetricsOut.bin\n"
-            "  ExtendedTileMetricsOut.bin\n\n"
-            "For run-folder level tools see the programs in the tools/ directory.\n",
+            "  ExtendedTileMetricsOut.bin\n",
             prog);
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc != 2) {
-        print_usage(argv[0]);
-        return 1;
-    }
+    if (argc != 2) { usage(argv[0]); return 1; }
 
     const char *filename = argv[1];
     interop_file_type_t type = interop_detect_file_type(filename);
@@ -112,7 +99,7 @@ int main(int argc, char *argv[])
     }
     default:
         fprintf(stderr, "Error: unrecognised InterOp file: %s\n\n", filename);
-        print_usage(argv[0]);
+        usage(argv[0]);
         return 1;
     }
 
