@@ -57,6 +57,15 @@ extern "C" {
 /** Number of base channels: A, C, G, T. */
 #define INTEROP_NUM_CHANNELS  4
 
+/** Fixed overhead bytes per record in ExtractionMetrics v3: lane(2)+tile(4)+cycle(2). */
+#define INTEROP_V3_RECORD_FIXED_SIZE  8
+/** Bytes per channel in ExtractionMetrics v3 records: fwhm(4)+intensity(2). */
+#define INTEROP_V3_BYTES_PER_CHANNEL  6
+
+/** Returns the effective number of channels for an extraction metrics object. */
+#define INTEROP_EXTRACTION_CHANNELS(m) \
+    ((m)->num_channels ? (m)->num_channels : (uint8_t)INTEROP_NUM_CHANNELS)
+
 /** Maximum number of PhiX error classes tracked per cycle. */
 #define INTEROP_NUM_ERROR_CLASSES 5
 
@@ -213,6 +222,7 @@ typedef struct {
 /** Collection of extraction metric records. */
 typedef struct {
     uint8_t  version;
+    uint8_t  num_channels; /**< Number of channels (2 for 2-colour, 4 for 4-colour) */
     interop_extraction_record_t *records;
     size_t   count;
     size_t   capacity;
@@ -921,19 +931,62 @@ int interop_read_extraction_metrics(const char *filename,
     }
     out->version = version;
 
-    /* v2: lane(2)+tile(4)+cycle(2)+intensity[4](8)+fwhm[4](16)+datetime(8) = 40 bytes
-     * v3: lane(2)+tile(4)+cycle(2)+intensity[4](8)+fwhm[4](16)             = 32 bytes */
+    /* v2: header(2): lane(2)+tile(4)+cycle(2)+intensity[4](8)+fwhm[4](16)+datetime(8) = 40 bytes
+     * v3: header(3): version(1)+record_size(1)+num_channels(1)
+     *     record: lane(2)+tile(4)+cycle(2)+fwhm[n](4n)+intensity[n](2n) = (8+6n) bytes
+     *     e.g. n=2: 20 bytes, n=4: 32 bytes */
+    if (version == 3) {
+        uint8_t num_channels;
+        if (!interop__fread1(&num_channels, 1, f)) { fclose(f); return 2; }
+        if (num_channels > INTEROP_NUM_CHANNELS) {
+            fprintf(stderr, "interop: ExtractionMetrics has %u channels; "
+                    "only %d will be stored\n", num_channels, INTEROP_NUM_CHANNELS);
+        }
+        /* clamp to the storage capacity of the struct */
+        out->num_channels = num_channels > INTEROP_NUM_CHANNELS
+                          ? (uint8_t)INTEROP_NUM_CHANNELS : num_channels;
+    } else {
+        out->num_channels = INTEROP_NUM_CHANNELS;
+    }
+
     while (!feof(f)) {
         interop_extraction_record_t rec;
+        /* n: channels to store; raw_n: channels actually present in the file */
+        uint8_t n     = out->num_channels;
+        uint8_t raw_n = (version == 3 && record_size >= INTEROP_V3_RECORD_FIXED_SIZE)
+                      ? (uint8_t)((record_size - INTEROP_V3_RECORD_FIXED_SIZE)
+                                  / INTEROP_V3_BYTES_PER_CHANNEL)
+                      : n;
+        uint8_t skip;
         memset(&rec, 0, sizeof(rec));
         if (!interop__fread1(&rec.lane,  sizeof(uint16_t), f)) break;
         if (!interop__fread1(&rec.tile,  sizeof(uint32_t), f)) break;
         if (!interop__fread1(&rec.cycle, sizeof(uint16_t), f)) break;
-        if (fread(rec.intensity, sizeof(int16_t), 4, f) != 4) break;
-        if (fread(rec.fwhm,      sizeof(float),   4, f) != 4) break;
         if (version == 2) {
-            uint64_t datetime;
-            if (!interop__fread1(&datetime, sizeof(uint64_t), f)) break;
+            if (fread(rec.intensity, sizeof(int16_t), 4, f) != 4) break;
+            if (fread(rec.fwhm,      sizeof(float),   4, f) != 4) break;
+            {
+                uint64_t datetime;
+                if (!interop__fread1(&datetime, sizeof(uint64_t), f)) break;
+            }
+        } else { /* v3: fwhm comes before intensity */
+            int read_ok = 1;
+            if (fread(rec.fwhm, sizeof(float), n, f) != n) break;
+            /* skip any extra fwhm channels beyond our storage capacity */
+            skip = raw_n > n ? (uint8_t)(raw_n - n) : 0;
+            while (read_ok && skip-- > 0) {
+                float tmp;
+                if (fread(&tmp, sizeof(float), 1, f) != 1) read_ok = 0;
+            }
+            if (!read_ok) break;
+            if (fread(rec.intensity, sizeof(int16_t), n, f) != n) break;
+            /* skip any extra intensity channels beyond our storage capacity */
+            skip = raw_n > n ? (uint8_t)(raw_n - n) : 0;
+            while (read_ok && skip-- > 0) {
+                int16_t tmp;
+                if (fread(&tmp, sizeof(int16_t), 1, f) != 1) read_ok = 0;
+            }
+            if (!read_ok) break;
         }
         if (!interop__ensure_cap((void **)&out->records, out->count,
                                  &out->capacity,
@@ -1194,16 +1247,25 @@ void interop_print_error_metrics(const interop_error_metrics_t *m)
 void interop_print_extraction_metrics(const interop_extraction_metrics_t *m)
 {
     size_t i;
+    uint8_t n = INTEROP_EXTRACTION_CHANNELS(m);
     printf("Extraction Metrics Version: %u\n", m->version);
+    if (m->num_channels) printf("Channels: %u\n", m->num_channels);
     printf("Records: %zu\n", m->count);
     for (i = 0; i < m->count; i++) {
         const interop_extraction_record_t *r = &m->records[i];
         printf("Lane: %u, Tile: %u, Cycle: %u\n", r->lane, r->tile, r->cycle);
-        printf("  Intensity (A,C,G,T): %d, %d, %d, %d\n",
-               r->intensity[0], r->intensity[1],
-               r->intensity[2], r->intensity[3]);
-        printf("  FWHM (A,C,G,T): %.2f, %.2f, %.2f, %.2f\n",
-               r->fwhm[0], r->fwhm[1], r->fwhm[2], r->fwhm[3]);
+        if (n == 2) {
+            printf("  Intensity (ch0,ch1): %d, %d\n",
+                   r->intensity[0], r->intensity[1]);
+            printf("  FWHM (ch0,ch1): %.2f, %.2f\n",
+                   r->fwhm[0], r->fwhm[1]);
+        } else {
+            printf("  Intensity (A,C,G,T): %d, %d, %d, %d\n",
+                   r->intensity[0], r->intensity[1],
+                   r->intensity[2], r->intensity[3]);
+            printf("  FWHM (A,C,G,T): %.2f, %.2f, %.2f, %.2f\n",
+                   r->fwhm[0], r->fwhm[1], r->fwhm[2], r->fwhm[3]);
+        }
     }
 }
 
@@ -1319,16 +1381,30 @@ void interop_dump_extraction_metrics_csv(const interop_extraction_metrics_t *m,
                                          FILE *out)
 {
     size_t i;
-    fprintf(out, "Lane,Tile,Cycle,"
-                 "IntensityA,IntensityC,IntensityG,IntensityT,"
-                 "FWHM_A,FWHM_C,FWHM_G,FWHM_T\n");
-    for (i = 0; i < m->count; i++) {
-        const interop_extraction_record_t *r = &m->records[i];
-        fprintf(out, "%u,%u,%u,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.3f\n",
-                r->lane, r->tile, r->cycle,
-                r->intensity[0], r->intensity[1],
-                r->intensity[2], r->intensity[3],
-                r->fwhm[0], r->fwhm[1], r->fwhm[2], r->fwhm[3]);
+    uint8_t n = INTEROP_EXTRACTION_CHANNELS(m);
+    if (n == 2) {
+        fprintf(out, "Lane,Tile,Cycle,"
+                     "Intensity_ch0,Intensity_ch1,"
+                     "FWHM_ch0,FWHM_ch1\n");
+        for (i = 0; i < m->count; i++) {
+            const interop_extraction_record_t *r = &m->records[i];
+            fprintf(out, "%u,%u,%u,%d,%d,%.3f,%.3f\n",
+                    r->lane, r->tile, r->cycle,
+                    r->intensity[0], r->intensity[1],
+                    r->fwhm[0], r->fwhm[1]);
+        }
+    } else {
+        fprintf(out, "Lane,Tile,Cycle,"
+                     "IntensityA,IntensityC,IntensityG,IntensityT,"
+                     "FWHM_A,FWHM_C,FWHM_G,FWHM_T\n");
+        for (i = 0; i < m->count; i++) {
+            const interop_extraction_record_t *r = &m->records[i];
+            fprintf(out, "%u,%u,%u,%d,%d,%d,%d,%.3f,%.3f,%.3f,%.3f\n",
+                    r->lane, r->tile, r->cycle,
+                    r->intensity[0], r->intensity[1],
+                    r->intensity[2], r->intensity[3],
+                    r->fwhm[0], r->fwhm[1], r->fwhm[2], r->fwhm[3]);
+        }
     }
 }
 
@@ -1477,12 +1553,18 @@ void interop_print_run_summary(const char *run_folder, FILE *out)
 
     /* Intensity at cycle 1 */
     if (xm.count > 0) {
-        static const char * const ch_names[4] = {"A", "C", "G", "T"};
+        static const char * const ch_names4[4] = {"A", "C", "G", "T"};
         int ch;
+        int nch = (int)INTEROP_EXTRACTION_CHANNELS(&xm);
         fprintf(out, "Intensity at Cycle 1:\n");
-        for (ch = 0; ch < 4; ch++)
-            fprintf(out, "  Channel %s: %.1f\n", ch_names[ch],
-                    interop_compute_intensity_cycle1(&xm, ch, -1));
+        for (ch = 0; ch < nch; ch++) {
+            if (nch == 2)
+                fprintf(out, "  Channel %d: %.1f\n", ch,
+                        interop_compute_intensity_cycle1(&xm, ch, -1));
+            else
+                fprintf(out, "  Channel %s: %.1f\n", ch_names4[ch],
+                        interop_compute_intensity_cycle1(&xm, ch, -1));
+        }
         fprintf(out, "\n");
     }
 
