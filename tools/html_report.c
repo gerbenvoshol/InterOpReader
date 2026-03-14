@@ -17,6 +17,16 @@
  *   SummaryRunMetricsOut.bin
  *   ExtendedTileMetricsOut.bin
  *   CorrectedIntMetricsOut.bin
+ *
+ * Sections in the generated report:
+ *   Summary          – top-level run statistics (reads, Q30, error rate, PF, occupancy)
+ *   Q-Score          – histogram and per-cycle mean Q / % >= Q30
+ *   Error Rate       – per-cycle PhiX error rate
+ *   Intensity        – per-cycle mean channel intensity (A/C/G/T) and FWHM
+ *   Base Composition – per-cycle % A/C/G/T and % no-call (from CorrectedIntMetrics)
+ *   Per-Lane Metrics – cluster count, density, % PF, % occupied, error rate, C1 intensity
+ *   Index Summary    – per-sample cluster counts
+ *   Run Metrics      – raw run-level statistics
  */
 
 #define INTEROP_IMPLEMENTATION
@@ -41,14 +51,14 @@ static void usage(const char *prog)
             "                    subdirectory with the metric binary files.\n"
             "  -o <output.html>  Path for the generated HTML report.\n\n"
             "Files read from InterOp/ (those present will be used):\n"
-            "  QMetricsOut.bin\n"
-            "  TileMetricsOut.bin\n"
-            "  ErrorMetricsOut.bin\n"
-            "  ExtractionMetricsOut.bin\n"
-            "  IndexMetricsOut.bin\n"
-            "  SummaryRunMetricsOut.bin\n"
-            "  ExtendedTileMetricsOut.bin\n"
-            "  CorrectedIntMetricsOut.bin\n",
+            "  QMetricsOut.bin           – Q-score histograms\n"
+            "  TileMetricsOut.bin        – Cluster density and counts per tile\n"
+            "  ErrorMetricsOut.bin       – PhiX error rates per cycle\n"
+            "  ExtractionMetricsOut.bin  – Channel intensity and FWHM per cycle\n"
+            "  IndexMetricsOut.bin       – Barcode index assignments per sample\n"
+            "  SummaryRunMetricsOut.bin  – Run-level cluster summary\n"
+            "  ExtendedTileMetricsOut.bin – Tile occupancy metrics\n"
+            "  CorrectedIntMetricsOut.bin – Per-cycle base counts (A/C/G/T) and no-call\n",
             prog);
 }
 
@@ -226,6 +236,11 @@ static void emit_html_head(FILE *out, const char *run_folder, const char *ts)
           "  <div class=\"nav-group\">Intensity</div>\n"
           "  <ul>\n"
           "    <li><a href=\"#intensity\">Intensity by Cycle</a></li>\n"
+          "    <li><a href=\"#fwhm\">FWHM by Cycle</a></li>\n"
+          "  </ul>\n"
+          "  <div class=\"nav-group\">Base Calls</div>\n"
+          "  <ul>\n"
+          "    <li><a href=\"#basecall\">Base Composition</a></li>\n"
           "  </ul>\n"
           "  <div class=\"nav-group\">Clusters</div>\n"
           "  <ul>\n"
@@ -618,8 +633,171 @@ static void emit_intensity_section(FILE *out,
 }
 
 /* ============================================================
- * Emit per-lane metrics section
+ * Emit FWHM-by-cycle section
  * ============================================================ */
+
+static void emit_fwhm_section(FILE *out,
+    const interop_extraction_metrics_t *xm)
+{
+    size_t i;
+    uint16_t max_cycle = 0;
+    for (i = 0; i < xm->count; i++)
+        if (xm->records[i].cycle > max_cycle)
+            max_cycle = xm->records[i].cycle;
+
+    if (max_cycle == 0) return;
+
+    double *sum_a = (double *)calloc(max_cycle + 1, sizeof(double));
+    double *sum_c = (double *)calloc(max_cycle + 1, sizeof(double));
+    double *sum_g = (double *)calloc(max_cycle + 1, sizeof(double));
+    double *sum_t = (double *)calloc(max_cycle + 1, sizeof(double));
+    size_t *cnt   = (size_t *)calloc(max_cycle + 1, sizeof(size_t));
+
+    if (!sum_a || !sum_c || !sum_g || !sum_t || !cnt) {
+        free(sum_a); free(sum_c); free(sum_g); free(sum_t); free(cnt);
+        return;
+    }
+
+    for (i = 0; i < xm->count; i++) {
+        const interop_extraction_record_t *r = &xm->records[i];
+        uint16_t cy = r->cycle;
+        sum_a[cy] += r->fwhm[0];
+        sum_c[cy] += r->fwhm[1];
+        sum_g[cy] += r->fwhm[2];
+        sum_t[cy] += r->fwhm[3];
+        cnt[cy]++;
+    }
+
+    fputs("<section id=\"fwhm\">\n"
+          "<h2>FWHM by Cycle</h2>\n"
+          "<div class=\"chart-wrap\">\n"
+          "  <h3>Mean Full-Width Half-Max per Cycle (focus quality indicator)</h3>\n"
+          "  <canvas id=\"fwhmCycleChart\" height=\"90\"></canvas>\n"
+          "</div>\n"
+          "</section>\n", out);
+
+    fputs("<script>\n"
+          "var fwhmCycleLabels=[", out);
+    uint16_t cy;
+    for (cy = 1; cy <= max_cycle; cy++) {
+        if (cy > 1) fputc(',', out);
+        fprintf(out, "%u", cy);
+    }
+    fputs("];\n", out);
+    fputs("var fwhmCycleA=[", out);
+    for (cy = 1; cy <= max_cycle; cy++) {
+        if (cy > 1) fputc(',', out);
+        fprintf(out, "%.2f", cnt[cy] ? sum_a[cy] / cnt[cy] : 0.0);
+    }
+    fputs("];\n", out);
+    fputs("var fwhmCycleC=[", out);
+    for (cy = 1; cy <= max_cycle; cy++) {
+        if (cy > 1) fputc(',', out);
+        fprintf(out, "%.2f", cnt[cy] ? sum_c[cy] / cnt[cy] : 0.0);
+    }
+    fputs("];\n", out);
+    fputs("var fwhmCycleG=[", out);
+    for (cy = 1; cy <= max_cycle; cy++) {
+        if (cy > 1) fputc(',', out);
+        fprintf(out, "%.2f", cnt[cy] ? sum_g[cy] / cnt[cy] : 0.0);
+    }
+    fputs("];\n", out);
+    fputs("var fwhmCycleT=[", out);
+    for (cy = 1; cy <= max_cycle; cy++) {
+        if (cy > 1) fputc(',', out);
+        fprintf(out, "%.2f", cnt[cy] ? sum_t[cy] / cnt[cy] : 0.0);
+    }
+    fputs("];\n</script>\n", out);
+
+    free(sum_a); free(sum_c); free(sum_g); free(sum_t); free(cnt);
+}
+
+/* ============================================================
+ * Emit base-composition-by-cycle section (CorrectedIntMetrics)
+ * ============================================================ */
+
+static void emit_basecall_section(FILE *out,
+    const interop_corrected_int_metrics_t *cm)
+{
+    size_t i;
+    uint16_t max_cycle = 0;
+    for (i = 0; i < cm->count; i++)
+        if (cm->records[i].cycle > max_cycle)
+            max_cycle = cm->records[i].cycle;
+
+    if (max_cycle == 0) return;
+
+    double   *sum_a     = (double *)calloc(max_cycle + 1, sizeof(double));
+    double   *sum_c     = (double *)calloc(max_cycle + 1, sizeof(double));
+    double   *sum_g     = (double *)calloc(max_cycle + 1, sizeof(double));
+    double   *sum_t     = (double *)calloc(max_cycle + 1, sizeof(double));
+    double   *sum_nc    = (double *)calloc(max_cycle + 1, sizeof(double));
+    uint64_t *sum_total = (uint64_t *)calloc(max_cycle + 1, sizeof(uint64_t));
+
+    if (!sum_a || !sum_c || !sum_g || !sum_t || !sum_nc || !sum_total) {
+        free(sum_a); free(sum_c); free(sum_g); free(sum_t);
+        free(sum_nc); free(sum_total);
+        return;
+    }
+
+    for (i = 0; i < cm->count; i++) {
+        const interop_corrected_int_record_t *r = &cm->records[i];
+        uint16_t cy = r->cycle;
+        sum_a[cy]  += r->base_count[0];
+        sum_c[cy]  += r->base_count[1];
+        sum_g[cy]  += r->base_count[2];
+        sum_t[cy]  += r->base_count[3];
+        sum_nc[cy] += r->no_call;
+        sum_total[cy] += (uint64_t)r->base_count[0] + r->base_count[1]
+                       + r->base_count[2] + r->base_count[3]
+                       + r->no_call;
+    }
+
+    fputs("<section id=\"basecall\">\n"
+          "<h2>Base Composition by Cycle</h2>\n"
+          "<div class=\"chart-row\">\n"
+          "  <div class=\"chart-wrap\">\n"
+          "    <h3>Base Composition %% per Cycle (A / C / G / T)</h3>\n"
+          "    <canvas id=\"baseCompChart\" height=\"120\"></canvas>\n"
+          "  </div>\n"
+          "  <div class=\"chart-wrap\">\n"
+          "    <h3>%% No-Call per Cycle</h3>\n"
+          "    <canvas id=\"noCallChart\" height=\"120\"></canvas>\n"
+          "  </div>\n"
+          "</div>\n"
+          "</section>\n", out);
+
+    fputs("<script>\n"
+          "var baseCompLabels=[", out);
+    uint16_t cy;
+    for (cy = 1; cy <= max_cycle; cy++) {
+        if (cy > 1) fputc(',', out);
+        fprintf(out, "%u", cy);
+    }
+    fputs("];\n", out);
+
+#define EMIT_BASE_PCT(varname, sumptr) \
+    fputs("var " varname "=[", out); \
+    for (cy = 1; cy <= max_cycle; cy++) { \
+        if (cy > 1) fputc(',', out); \
+        double v = sum_total[cy] > 0 \
+            ? (sumptr)[cy] / (double)sum_total[cy] * 100.0 : 0.0; \
+        fprintf(out, "%.2f", v); \
+    } \
+    fputs("];\n", out)
+
+    EMIT_BASE_PCT("baseA", sum_a);
+    EMIT_BASE_PCT("baseC", sum_c);
+    EMIT_BASE_PCT("baseG", sum_g);
+    EMIT_BASE_PCT("baseT", sum_t);
+    EMIT_BASE_PCT("baseNC", sum_nc);
+#undef EMIT_BASE_PCT
+
+    fputs("</script>\n", out);
+
+    free(sum_a); free(sum_c); free(sum_g); free(sum_t);
+    free(sum_nc); free(sum_total);
+}
 
 static void emit_lane_section(FILE *out,
     const lane_stat_t *stats, int nlanes)
@@ -636,6 +814,16 @@ static void emit_lane_section(FILE *out,
           "  <div class=\"chart-wrap\">\n"
           "    <h3>Cluster Density per Lane (k/mm&sup2;)</h3>\n"
           "    <canvas id=\"laneDensityChart\" height=\"150\"></canvas>\n"
+          "  </div>\n"
+          "</div>\n"
+          "<div class=\"chart-row\">\n"
+          "  <div class=\"chart-wrap\">\n"
+          "    <h3>%% Occupied per Lane</h3>\n"
+          "    <canvas id=\"laneOccChart\" height=\"150\"></canvas>\n"
+          "  </div>\n"
+          "  <div class=\"chart-wrap\">\n"
+          "    <h3>Mean Error Rate per Lane (%%)</h3>\n"
+          "    <canvas id=\"laneErrChart\" height=\"150\"></canvas>\n"
           "  </div>\n"
           "</div>\n"
           "<div class=\"table-wrap\">\n"
@@ -726,6 +914,20 @@ static void emit_lane_section(FILE *out,
         if (k) fputc(',', out);
         double v = stats[k].n_density_pf ? stats[k].density_pf / (double)stats[k].n_density_pf : 0.0;
         fprintf(out, "%.1f", v);
+    }
+    fputs("];\nvar laneOcc=[", out);
+    for (k = 0; k < nlanes; k++) {
+        if (k) fputc(',', out);
+        double cc  = stats[k].n_cluster    ? stats[k].cluster_count    / (double)stats[k].n_cluster    : 0.0;
+        double occ = stats[k].n_occupied   ? stats[k].occupied         / (double)stats[k].n_occupied   : 0.0;
+        double pct = (cc > 0) ? occ / cc * 100.0 : 0.0;
+        fprintf(out, "%.1f", pct);
+    }
+    fputs("];\nvar laneErr=[", out);
+    for (k = 0; k < nlanes; k++) {
+        if (k) fputc(',', out);
+        double v = stats[k].n_error ? stats[k].error_rate_sum / (double)stats[k].n_error : 0.0;
+        fprintf(out, "%.4f", v);
     }
     fputs("];\n</script>\n", out);
 }
@@ -907,7 +1109,7 @@ static void emit_runmeta_section(FILE *out,
 
 static void emit_chart_scripts(FILE *out,
     int has_qm, int has_em, int has_xm, int has_tm_lanes,
-    int has_idx)
+    int has_idx, int has_cm)
 {
     fputs("<script src=\"https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js\"></script>\n"
           "<script>\n"
@@ -975,6 +1177,20 @@ static void emit_chart_scripts(FILE *out,
           "  options:{responsive:true,\n"
           "    scales:{x:{title:{display:true,text:'Cycle'},grid:gridOpts},\n"
           "            y:{title:{display:true,text:'Intensity'},min:0,grid:gridOpts}}}\n"
+          "});\n"
+
+          "new Chart(document.getElementById('fwhmCycleChart'),{\n"
+          "  type:'line',\n"
+          "  data:{labels:fwhmCycleLabels,\n"
+          "    datasets:[\n"
+          "      makeLineDataset('A',fwhmCycleA,'#22c55e'),\n"
+          "      makeLineDataset('C',fwhmCycleC,'#3b82f6'),\n"
+          "      makeLineDataset('G',fwhmCycleG,'#f59e0b'),\n"
+          "      makeLineDataset('T',fwhmCycleT,'#ef4444')\n"
+          "    ]},\n"
+          "  options:{responsive:true,\n"
+          "    scales:{x:{title:{display:true,text:'Cycle'},grid:gridOpts},\n"
+          "            y:{title:{display:true,text:'FWHM'},min:0,grid:gridOpts}}}\n"
           "});\n", out);
     }
 
@@ -998,7 +1214,25 @@ static void emit_chart_scripts(FILE *out,
           "      {label:'Density PF',data:laneDenPF,backgroundColor:'rgba(16,185,129,0.7)',borderWidth:0}\n"
           "    ]},\n"
           "  options:{responsive:true,\n"
-          "    scales:{x:{grid:gridOpts},y:{title:{display:true,text:'k/mm²'},grid:gridOpts}}}\n"
+          "    scales:{x:{grid:gridOpts},y:{title:{display:true,text:'k/mm\u00b2'},grid:gridOpts}}}\n"
+          "});\n"
+          "new Chart(document.getElementById('laneOccChart'),{\n"
+          "  type:'bar',\n"
+          "  data:{labels:laneLabels,\n"
+          "    datasets:[{label:'%% Occupied',data:laneOcc,\n"
+          "      backgroundColor:'rgba(168,85,247,0.7)',borderWidth:0}]},\n"
+          "  options:{responsive:true,plugins:{legend:{display:false}},\n"
+          "    scales:{x:{grid:gridOpts},\n"
+          "            y:{title:{display:true,text:'%% Occupied'},min:0,max:100,grid:gridOpts}}}\n"
+          "});\n"
+          "new Chart(document.getElementById('laneErrChart'),{\n"
+          "  type:'bar',\n"
+          "  data:{labels:laneLabels,\n"
+          "    datasets:[{label:'Error Rate (%%)',data:laneErr,\n"
+          "      backgroundColor:'rgba(220,38,38,0.7)',borderWidth:0}]},\n"
+          "  options:{responsive:true,plugins:{legend:{display:false}},\n"
+          "    scales:{x:{grid:gridOpts},\n"
+          "            y:{title:{display:true,text:'Error Rate (%%)'},min:0,grid:gridOpts}}}\n"
           "});\n", out);
     }
 
@@ -1013,6 +1247,32 @@ static void emit_chart_scripts(FILE *out,
           "    plugins:{legend:{display:false}},\n"
           "    scales:{x:{title:{display:true,text:'Cluster Count'},grid:gridOpts},\n"
           "            y:{grid:gridOpts}}}\n"
+          "});\n", out);
+    }
+
+    if (has_cm) {
+        fputs(
+          "new Chart(document.getElementById('baseCompChart'),{\n"
+          "  type:'line',\n"
+          "  data:{labels:baseCompLabels,\n"
+          "    datasets:[\n"
+          "      makeLineDataset('A',baseA,'#22c55e'),\n"
+          "      makeLineDataset('C',baseC,'#3b82f6'),\n"
+          "      makeLineDataset('G',baseG,'#f59e0b'),\n"
+          "      makeLineDataset('T',baseT,'#ef4444')\n"
+          "    ]},\n"
+          "  options:{responsive:true,\n"
+          "    scales:{x:{title:{display:true,text:'Cycle'},grid:gridOpts},\n"
+          "            y:{title:{display:true,text:'Base %%'},min:0,max:100,\n"
+          "               stacked:false,grid:gridOpts}}}\n"
+          "});\n"
+          "new Chart(document.getElementById('noCallChart'),{\n"
+          "  type:'line',\n"
+          "  data:{labels:baseCompLabels,\n"
+          "    datasets:[makeLineDataset('%% No-Call',baseNC,'#94a3b8')]},\n"
+          "  options:{responsive:true,plugins:{legend:{display:false}},\n"
+          "    scales:{x:{title:{display:true,text:'Cycle'},grid:gridOpts},\n"
+          "            y:{title:{display:true,text:'%% No-Call'},min:0,grid:gridOpts}}}\n"
           "});\n", out);
     }
 
@@ -1241,12 +1501,24 @@ int main(int argc, char *argv[])
               out);
     }
 
-    /* Intensity section */
+    /* Intensity + FWHM sections — both require ExtractionMetrics */
     if (has_xm) {
         emit_intensity_section(out, &xm);
+        emit_fwhm_section(out, &xm);
     } else {
         fputs("<section id=\"intensity\"><h2>Intensity by Cycle</h2>"
+              "<p style=\"color:var(--muted)\">ExtractionMetricsOut.bin not found.</p></section>\n"
+              "<section id=\"fwhm\"><h2>FWHM by Cycle</h2>"
               "<p style=\"color:var(--muted)\">ExtractionMetricsOut.bin not found.</p></section>\n",
+              out);
+    }
+
+    /* Base composition section */
+    if (has_cm) {
+        emit_basecall_section(out, &cm);
+    } else {
+        fputs("<section id=\"basecall\"><h2>Base Composition by Cycle</h2>"
+              "<p style=\"color:var(--muted)\">CorrectedIntMetricsOut.bin not found.</p></section>\n",
               out);
     }
 
@@ -1277,7 +1549,8 @@ int main(int argc, char *argv[])
         has_em,
         has_xm,
         nlanes > 0,
-        has_im && im.count > 0);
+        has_im && im.count > 0,
+        has_cm && cm.count > 0);
 
     /* Footer */
     fputs("</main>\n</div>\n"
@@ -1286,9 +1559,6 @@ int main(int argc, char *argv[])
           "Charts powered by <a href=\"https://www.chartjs.org/\" target=\"_blank\">Chart.js</a>\n"
           "</footer>\n"
           "</body>\n</html>\n", out);
-
-    /* Suppress unused variable warnings */
-    (void)has_cm; (void)cm;
 
     /* Free all metric data */
     if (has_qm)  interop_free_qmetrics(&qm);
