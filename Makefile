@@ -31,7 +31,8 @@ TOOL_NAMES = \
     plot_flowcell \
     plot_sample_qc \
     aggregate \
-    html_report
+    html_report \
+    json_report
 
 TOOL_BINS = $(addprefix tools/, $(TOOL_NAMES))
 
